@@ -1,5 +1,5 @@
 void sw(long x, long n, long *dest){
-    static void *jt[7] = {
+    void *jt[7] = {
         &&locA, &&loc_def, &&locB, 
         &&locC, &&locD, &&loc_def,
         &&locD
