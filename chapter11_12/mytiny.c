@@ -16,7 +16,6 @@ typedef struct {
 } sbuf_t;
 
 void sbuf_init(sbuf_t *sp, int n);
-// void sbuf_deinit(sbuf_t *sp);
 void sbuf_insert(sbuf_t *sp, int item);
 int sbuf_remove(sbuf_t *sp);
 
@@ -30,12 +29,6 @@ void sbuf_init(sbuf_t *sp, int n)
     Sem_init(&sp->slots, 0, n);      /* Initially, buf has n empty slots */
     Sem_init(&sp->items, 0, 0);      /* Initially, buf has zero data items */
 }
-
-/* Clean up buffer sp */
-// void sbuf_deinit(sbuf_t *sp)
-// {
-//     Free(sp->buf);
-// }
 
 /* Insert item onto the rear of shared buffer sp */
 void sbuf_insert(sbuf_t *sp, int item)
@@ -62,7 +55,7 @@ int sbuf_remove(sbuf_t *sp)
 
 void doit(int fd);
 void read_requesthdrs(rio_t *rp);
-int parse_uri(char *uri, char *filename, char *cgiargs);
+void parse_uri(char *uri, char *filename);
 void serve_static(int fd, char *filename, int filesize);
 void get_filetype(char *filename, char *filetype);
 void serve_dynamic(int fd, char *filename, char *cgiargs);
@@ -92,11 +85,9 @@ int main(int argc, char **argv)
         Pthread_create(&tid, NULL, thread, NULL);
     }
     while (1) {
-        //clientlen = sizeof(clientaddr);
         clientlen = sizeof(struct sockaddr_storage);
         connfd = Accept(listenfd, (SA *)&clientaddr, &clientlen); //line:netp:tiny:accept
         sbuf_insert(&sbuf, connfd);
-        //Close(connfd);                                            //line:netp:tiny:close
     }
 }
 
@@ -114,47 +105,42 @@ void *thread(void *vargp){
  */
 void doit(int fd) 
 {
-    int is_static;
     struct stat sbuf;
-    char buf[MAXLINE], method[MAXLINE], uri[MAXLINE], version[MAXLINE];
-    char filename[MAXLINE], cgiargs[MAXLINE];
+    char buf[MAXLINE], method[MAXLINE],  uri[MAXLINE], version[MAXLINE];
+    char filename[MAXLINE];
     rio_t rio;
-  
     /* Read request line and headers */
     Rio_readinitb(&rio, fd);
     Rio_readlineb(&rio, buf, MAXLINE);                   //line:netp:doit:readrequest
     sscanf(buf, "%s %s %s", method, uri, version);       //line:netp:doit:parserequest
     if (strcasecmp(method, "GET")) {                     //line:netp:doit:beginrequesterr
        clienterror(fd, method, "501", "Not Implemented",
-                "Tiny does not implement this method");
+                "MyTiny does not implement this method");
         return;
     }                                                    //line:netp:doit:endrequesterr
-    read_requesthdrs(&rio);                              //line:netp:doit:readrequesthdrs
 
+    // // url -> uri
+    // strtok (url,":/");
+    // for(int i = 2; i > 0; i--){
+    //     strtok (NULL,":/");
+    // }
+    // char *uri = strtok (NULL, ":/");
+    
     /* Parse URI from GET request */
-    is_static = parse_uri(uri, filename, cgiargs);       //line:netp:doit:staticcheck
+    parse_uri(uri, filename);       //line:netp:doit:staticcheck
     if (stat(filename, &sbuf) < 0) {                     //line:netp:doit:beginnotfound
 	    clienterror(fd, filename, "404", "Not found",
-		        "Tiny couldn't find this file");
+		        "MyTiny couldn't find this file");
         return;
     }                                                    //line:netp:doit:endnotfound
-
-    if (is_static) { /* Serve static content */          
-        if (!(S_ISREG(sbuf.st_mode)) || !(S_IRUSR & sbuf.st_mode)) { //line:netp:doit:readable
-            clienterror(fd, filename, "403", "Forbidden",
-                "Tiny couldn't read the file");
-            return;
-        }
-        serve_static(fd, filename, sbuf.st_size);        //line:netp:doit:servestatic
+    // just static
+    if (!(S_ISREG(sbuf.st_mode)) || !(S_IRUSR & sbuf.st_mode)) { //line:netp:doit:readable
+        clienterror(fd, filename, "403", "Forbidden",
+            "MyTiny couldn't read the file");
+        return;
     }
-    else { /* Serve dynamic content */
-	if (!(S_ISREG(sbuf.st_mode)) || !(S_IXUSR & sbuf.st_mode)) { //line:netp:doit:executable
-	    clienterror(fd, filename, "403", "Forbidden",
-			"Tiny couldn't run the CGI program");
-	    return;
-	}
-	serve_dynamic(fd, filename, cgiargs);            //line:netp:doit:servedynamic
-    }
+    puts("start serve static!");
+    serve_static(fd, filename, sbuf.st_size);        //line:netp:doit:servestatic
 }
 
 /*
@@ -166,8 +152,8 @@ void read_requesthdrs(rio_t *rp)
 
     Rio_readlineb(rp, buf, MAXLINE);
     while(strcmp(buf, "\r\n")) {          //line:netp:readhdrs:checkterm
-	Rio_readlineb(rp, buf, MAXLINE);
-	printf("%s", buf);
+        Rio_readlineb(rp, buf, MAXLINE);
+        printf("%s", buf);
     }
     return;
 }
@@ -176,30 +162,14 @@ void read_requesthdrs(rio_t *rp)
  * parse_uri - parse URI into filename and CGI args
  *             return 0 if dynamic content, 1 if static
  */
-int parse_uri(char *uri, char *filename, char *cgiargs) 
+void parse_uri(char *uri, char *filename) 
 {
     char *ptr;
 
-    if (!strstr(uri, "cgi-bin")) {  /* Static content */ //line:netp:parseuri:isstatic
-	strcpy(cgiargs, "");                             //line:netp:parseuri:clearcgi
-	strcpy(filename, ".");                           //line:netp:parseuri:beginconvert1
-	strcat(filename, uri);                           //line:netp:parseuri:endconvert1
-	if (uri[strlen(uri)-1] == '/')                   //line:netp:parseuri:slashcheck
-	    strcat(filename, "home.html");               //line:netp:parseuri:appenddefault
-	return 1;
-    }
-    else {  /* Dynamic content */                        //line:netp:parseuri:isdynamic
-        ptr = index(uri, '?');                           //line:netp:parseuri:beginextract
-        if (ptr) {
-            strcpy(cgiargs, ptr+1);
-            *ptr = '\0';
-        }
-        else 
-            strcpy(cgiargs, "");                         //line:netp:parseuri:endextract
-        strcpy(filename, ".");                           //line:netp:parseuri:beginconvert2
-        strcat(filename, uri);                           //line:netp:parseuri:endconvert2
-        return 0;
-    }
+    strcpy(filename, "./");  //not like tiny!                        //line:netp:parseuri:beginconvert1
+    strcat(filename, uri);                           //line:netp:parseuri:endconvert1
+    if (uri[strlen(uri)-1] == '/')                   //line:netp:parseuri:slashcheck
+        strcat(filename, "home.html");               //line:netp:parseuri:appenddefault
 }
 /*
  * serve_static - copy a file back to the client 
@@ -212,7 +182,7 @@ void serve_static(int fd, char *filename, int filesize)
     /* Send response headers to client */
     get_filetype(filename, filetype);       //line:netp:servestatic:getfiletype
     sprintf(buf, "HTTP/1.0 200 OK\r\n");    //line:netp:servestatic:beginserve
-    sprintf(buf, "%sServer: Tiny Web Server\r\n", buf);
+    sprintf(buf, "%sServer: MyMyTiny Web Server\r\n", buf);
     sprintf(buf, "%sContent-length: %d\r\n", buf, filesize);
     sprintf(buf, "%sContent-type: %s\r\n\r\n", buf, filetype);
     Rio_writen(fd, buf, strlen(buf));       //line:netp:servestatic:endserve
@@ -223,6 +193,7 @@ void serve_static(int fd, char *filename, int filesize)
     Close(srcfd);                           //line:netp:servestatic:close
     Rio_writen(fd, srcp, filesize);         //line:netp:servestatic:write
     Munmap(srcp, filesize);                 //line:netp:servestatic:munmap
+    puts("end serve static!");
 }
 
 /*
@@ -250,7 +221,7 @@ void serve_dynamic(int fd, char *filename, char *cgiargs)
     /* Return first part of HTTP response */
     sprintf(buf, "HTTP/1.0 200 OK\r\n"); 
     Rio_writen(fd, buf, strlen(buf));
-    sprintf(buf, "Server: Tiny Web Server\r\n");
+    sprintf(buf, "Server: MyMyTiny Web Server\r\n");
     Rio_writen(fd, buf, strlen(buf));
   
     if (Fork() == 0) { /* child */ //line:netp:servedynamic:fork
@@ -271,11 +242,11 @@ void clienterror(int fd, char *cause, char *errnum,
     char buf[MAXLINE], body[MAXBUF];
 
     /* Build the HTTP response body */
-    sprintf(body, "<html><title>Tiny Error</title>");
+    sprintf(body, "<html><title>MyTiny Error</title>");
     sprintf(body, "%s<body bgcolor=""ffffff"">\r\n", body);
     sprintf(body, "%s%s: %s\r\n", body, errnum, shortmsg);
     sprintf(body, "%s<p>%s: %s\r\n", body, longmsg, cause);
-    sprintf(body, "%s<hr><em>The Tiny Web server</em>\r\n", body);
+    sprintf(body, "%s<hr><em>The MyTiny Web server</em>\r\n", body);
 
     /* Print the HTTP response */
     sprintf(buf, "HTTP/1.0 %s %s\r\n", errnum, shortmsg);
